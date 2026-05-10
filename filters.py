@@ -130,8 +130,15 @@ def _emboss(frame: np.ndarray) -> np.ndarray:
 
 
 def _pencil_sketch(frame: np.ndarray) -> np.ndarray:
-    gray, _ = cv2.pencilSketch(frame, sigma_s=60, sigma_r=0.07, shade_factor=0.05)
-    return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+    """
+    Fast pencil sketch using Gaussian divide-blend.
+    Avoids cv2.pencilSketch() which is extremely slow on live video
+    and causes the app to freeze/crash on large frames.
+    """
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (21, 21), 0)
+    sketch = cv2.divide(gray, blurred, scale=256.0)
+    return cv2.cvtColor(sketch, cv2.COLOR_GRAY2BGR)
 
 
 def _negative(frame: np.ndarray) -> np.ndarray:

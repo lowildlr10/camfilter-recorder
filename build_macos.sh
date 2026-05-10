@@ -10,7 +10,6 @@ pyinstaller \
   --onefile \
   --windowed \
   --name "CamFilterRecorder" \
-  --add-data "filters.py:." \
   main.py
 
 echo "Done! Find CamFilterRecorder.app in the dist/ folder."

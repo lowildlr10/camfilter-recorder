@@ -3,13 +3,14 @@ echo Installing dependencies...
 pip install -r requirements.txt
 pip install pyinstaller
 
-echo Building executable...
+echo Building with PyInstaller (--onedir for fast startup)...
 pyinstaller ^
-  --onefile ^
+  --onedir ^
   --windowed ^
   --name "CamFilterRecorder" ^
-  --add-data "filters.py;." ^
   main.py
 
-echo Done! Find CamFilterRecorder.exe in the dist\ folder.
+echo.
+echo Done! The app folder is at dist\CamFilterRecorder\
+echo Run dist\CamFilterRecorder\CamFilterRecorder.exe to test it.
 pause

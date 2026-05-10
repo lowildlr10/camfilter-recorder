@@ -51,7 +51,6 @@ echo "Building standalone binary..."
 pyinstaller \
   --onefile \
   --name "CamFilterRecorder" \
-  --add-data "filters.py:." \
   main.py
 
 chmod +x dist/CamFilterRecorder

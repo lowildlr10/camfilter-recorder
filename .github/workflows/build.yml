@@ -7,8 +7,12 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-windows-exe:
-    name: Windows EXE
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Windows  —  NSIS setup installer (fast startup, split DLLs)
+  # ────────────────────────────────────────────────────────────────────────────
+  build-windows-installer:
+    name: Windows NSIS Installer
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -18,32 +22,50 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install dependencies
+      - name: Install Python dependencies
         run: |
           pip install -r requirements.txt
           pip install pyinstaller
 
-      - name: Build EXE
+      - name: Build with PyInstaller (--onedir for fast startup)
         run: |
           pyinstaller `
-            --onefile `
+            --onedir `
             --windowed `
             --name "CamFilterRecorder" `
-            --add-data "filters.py;." `
             main.py
 
-      - name: Upload EXE artifact
+      - name: Write LICENSE for NSIS
+        run: copy LICENSE.txt packaging\LICENSE.txt
+        shell: cmd
+
+      - name: Install NSIS
+        run: choco install nsis --no-progress -y
+
+      - name: Build NSIS installer
+        run: |
+          cd packaging
+          makensis installer.nsi
+
+      - name: Move installer to dist
+        run: move packaging\CamFilterRecorder-Setup.exe dist\CamFilterRecorder-Setup.exe
+        shell: cmd
+
+      - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
-          name: CamFilterRecorder-windows
-          path: dist/CamFilterRecorder.exe
+          name: CamFilterRecorder-windows-installer
+          path: dist/CamFilterRecorder-Setup.exe
 
-      - name: Attach EXE to release
+      - name: Attach installer to release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/CamFilterRecorder.exe
+          files: dist/CamFilterRecorder-Setup.exe
 
+  # ────────────────────────────────────────────────────────────────────────────
+  # Fedora  —  RPM
+  # ────────────────────────────────────────────────────────────────────────────
   build-fedora-rpm:
     name: Fedora RPM
     runs-on: ubuntu-latest
@@ -72,7 +94,6 @@ jobs:
           pyinstaller \
             --onefile \
             --name "CamFilterRecorder" \
-            --add-data "filters.py:." \
             main.py
 
       - name: Set up RPM build tree
@@ -91,7 +112,6 @@ jobs:
         run: |
           mkdir -p dist
           find ~/rpmbuild/RPMS -name "*.rpm" -exec cp {} dist/ \;
-          ls dist/
 
       - name: Upload RPM artifact
         uses: actions/upload-artifact@v4
@@ -105,6 +125,9 @@ jobs:
         with:
           files: dist/*.rpm
 
+  # ────────────────────────────────────────────────────────────────────────────
+  # Ubuntu / Debian  —  DEB
+  # ────────────────────────────────────────────────────────────────────────────
   build-ubuntu-deb:
     name: Ubuntu / Debian DEB
     runs-on: ubuntu-22.04
@@ -135,7 +158,6 @@ jobs:
           pyinstaller \
             --onefile \
             --name "CamFilterRecorder" \
-            --add-data "filters.py:." \
             main.py
 
       - name: Assemble DEB package tree
@@ -149,9 +171,7 @@ jobs:
           chmod 755 deb-pkg/DEBIAN
 
       - name: Build DEB
-        run: |
-          dpkg-deb --build deb-pkg dist/camfilter-recorder_1.0.0_amd64.deb
-          ls -lh dist/
+        run: dpkg-deb --build deb-pkg dist/camfilter-recorder_1.1.0_amd64.deb
 
       - name: Upload DEB artifact
         uses: actions/upload-artifact@v4
@@ -165,6 +185,9 @@ jobs:
         with:
           files: dist/*.deb
 
+  # ────────────────────────────────────────────────────────────────────────────
+  # macOS  —  zip
+  # ────────────────────────────────────────────────────────────────────────────
   build-macos:
     name: macOS App
     runs-on: macos-latest
@@ -181,13 +204,12 @@ jobs:
           pip3 install -r requirements.txt
           pip3 install pyinstaller
 
-      - name: Build .app
+      - name: Build .app bundle
         run: |
           pyinstaller \
             --onefile \
             --windowed \
             --name "CamFilterRecorder" \
-            --add-data "filters.py:." \
             main.py
 
       - name: Zip app for upload
