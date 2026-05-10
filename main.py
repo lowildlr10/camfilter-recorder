@@ -3,6 +3,7 @@ import os
 import time
 import cv2
 import numpy as np
+from collections import deque
 from datetime import datetime
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -22,7 +23,8 @@ RESOLUTIONS = {
     "240p  (426x240)":   (426,  240),
 }
 
-FPS = 30.0
+FALLBACK_FPS = 25.0
+FPS_SAMPLE_WINDOW = 60   # number of recent frames used to compute real FPS
 
 CODEC_CANDIDATES = [
     ("XVID", ".avi"),
@@ -32,12 +34,12 @@ CODEC_CANDIDATES = [
 ]
 
 
-def _try_open_writer(filepath_no_ext: str, w: int, h: int):
+def _try_open_writer(filepath_no_ext: str, w: int, h: int, fps: float):
     """Try codec candidates in order and return (writer, actual_path) or (None, None)."""
     for fourcc_str, ext in CODEC_CANDIDATES:
         path = filepath_no_ext + ext
         fourcc = cv2.VideoWriter_fourcc(*fourcc_str)
-        writer = cv2.VideoWriter(path, fourcc, FPS, (w, h))
+        writer = cv2.VideoWriter(path, fourcc, fps, (w, h))
         if writer.isOpened():
             return writer, path
         writer.release()
@@ -80,8 +82,9 @@ class MainWindow(QMainWindow):
         self.is_recording = False
         self.current_frame: np.ndarray | None = None
         self._last_saved_path: str = ""
-        self._last_write_time: float = 0.0
         self._rec_elapsed_secs: int = 0
+        # rolling window of frame-arrival timestamps for live FPS measurement
+        self._frame_times: deque[float] = deque(maxlen=FPS_SAMPLE_WINDOW)
 
         self.output_path = self._default_output_dir()
 
@@ -287,7 +290,19 @@ class MainWindow(QMainWindow):
         if idx is not None:
             self._start_camera(idx)
 
+    @property
+    def _measured_fps(self) -> float:
+        """Return actual camera FPS from recent frame timestamps, or FALLBACK_FPS."""
+        if len(self._frame_times) < 2:
+            return FALLBACK_FPS
+        elapsed = self._frame_times[-1] - self._frame_times[0]
+        if elapsed <= 0:
+            return FALLBACK_FPS
+        fps = (len(self._frame_times) - 1) / elapsed
+        return max(5.0, min(60.0, fps))
+
     def _on_frame(self, frame: np.ndarray):
+        self._frame_times.append(time.monotonic())
         self.current_frame = frame.copy()
 
         brightness = self.brightness_slider.value()
@@ -298,13 +313,10 @@ class MainWindow(QMainWindow):
         filtered = apply_filter(frame, filter_name)
 
         if self.is_recording and self.video_writer and self.video_writer.isOpened():
-            now = time.monotonic()
-            if now - self._last_write_time >= 1.0 / FPS:
-                res_key = self.res_combo.currentText()
-                w, h = RESOLUTIONS[res_key]
-                out_frame = cv2.resize(filtered, (w, h))
-                self.video_writer.write(out_frame)
-                self._last_write_time = now
+            res_key = self.res_combo.currentText()
+            w, h = RESOLUTIONS[res_key]
+            out_frame = cv2.resize(filtered, (w, h))
+            self.video_writer.write(out_frame)
 
         self._show_frame(filtered)
 
@@ -335,7 +347,8 @@ class MainWindow(QMainWindow):
         base_name = f"recording_{timestamp}_{filter_tag}_{res_key[:5].strip()}"
         filepath_no_ext = os.path.join(self.output_path, base_name)
 
-        writer, actual_path = _try_open_writer(filepath_no_ext, w, h)
+        actual_fps = round(self._measured_fps, 2)
+        writer, actual_path = _try_open_writer(filepath_no_ext, w, h, actual_fps)
 
         if writer is None:
             QMessageBox.critical(
@@ -365,7 +378,7 @@ class MainWindow(QMainWindow):
         self.blink_timer.start()
         self.clock_timer.start()
         self.rec_timer_label.setText("00:00:00")
-        self.status_bar.showMessage(f"Recording → {actual_path}")
+        self.status_bar.showMessage(f"Recording at {actual_fps} FPS → {actual_path}")
 
     def _stop_recording(self):
         self.is_recording = False
