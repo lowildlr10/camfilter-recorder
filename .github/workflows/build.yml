@@ -1,0 +1,187 @@
+name: Build Installers
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  build-windows-exe:
+    name: Windows EXE
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build EXE
+        run: |
+          pyinstaller `
+            --onefile `
+            --windowed `
+            --name "CamFilterRecorder" `
+            --add-data "filters.py;." `
+            main.py
+
+      - name: Upload EXE artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CamFilterRecorder-windows
+          path: dist/CamFilterRecorder.exe
+
+      - name: Attach EXE to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/CamFilterRecorder.exe
+
+  build-fedora-rpm:
+    name: Fedora RPM
+    runs-on: ubuntu-latest
+    container:
+      image: fedora:40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system packages
+        run: |
+          dnf install -y \
+            python3-pip python3-devel \
+            mesa-libGL glib2 \
+            rpm-build rpmdevtools \
+            gcc gcc-c++ make \
+            libXcb xcb-util-image xcb-util-keysyms xcb-util-renderutil xcb-util-wm \
+            libxkbcommon
+
+      - name: Install Python dependencies
+        run: |
+          pip3 install -r requirements.txt
+          pip3 install pyinstaller
+
+      - name: Build standalone binary with PyInstaller
+        run: |
+          pyinstaller \
+            --onefile \
+            --name "CamFilterRecorder" \
+            --add-data "filters.py:." \
+            main.py
+
+      - name: Set up RPM build tree
+        run: rpmdev-setuptree
+
+      - name: Copy binary into RPM source tree
+        run: |
+          mkdir -p ~/rpmbuild/BUILD
+          cp dist/CamFilterRecorder ~/rpmbuild/BUILD/
+
+      - name: Write RPM spec file
+        run: |
+          cat > ~/rpmbuild/SPECS/CamFilterRecorder.spec << 'SPECEOF'
+          Name:           CamFilterRecorder
+          Version:        1.0.0
+          Release:        1%{?dist}
+          Summary:        Webcam recorder with real-time filters
+          License:        MIT
+          BuildArch:      x86_64
+
+          %description
+          CamFilter Recorder is a desktop application for recording webcam
+          or camera input with real-time filters including Night Vision,
+          Infrared/Thermal, Sepia, Cartoon, and more. Supports resolutions
+          from 240p up to 1080p.
+
+          %install
+          mkdir -p %{buildroot}/usr/local/bin
+          install -m 755 %{_builddir}/CamFilterRecorder %{buildroot}/usr/local/bin/CamFilterRecorder
+
+          mkdir -p %{buildroot}/usr/share/applications
+          cat > %{buildroot}/usr/share/applications/camfilter-recorder.desktop << 'EOF'
+          [Desktop Entry]
+          Name=CamFilter Recorder
+          Comment=Webcam recorder with real-time filters
+          Exec=/usr/local/bin/CamFilterRecorder
+          Icon=camera
+          Terminal=false
+          Type=Application
+          Categories=AudioVideo;Video;Recorder;
+          EOF
+
+          %files
+          /usr/local/bin/CamFilterRecorder
+          /usr/share/applications/camfilter-recorder.desktop
+
+          %changelog
+          * $(date "+%a %b %d %Y") GitHub Actions <ci@github.com> - 1.0.0-1
+          - Initial RPM release
+          SPECEOF
+
+      - name: Build RPM
+        run: rpmbuild -bb ~/rpmbuild/SPECS/CamFilterRecorder.spec
+
+      - name: Find and copy RPM
+        run: |
+          find ~/rpmbuild/RPMS -name "*.rpm" -exec cp {} dist/ \;
+          ls dist/
+
+      - name: Upload RPM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CamFilterRecorder-fedora-rpm
+          path: dist/*.rpm
+
+      - name: Attach RPM to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.rpm
+
+  build-macos:
+    name: macOS App
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip3 install -r requirements.txt
+          pip3 install pyinstaller
+
+      - name: Build .app
+        run: |
+          pyinstaller \
+            --onefile \
+            --windowed \
+            --name "CamFilterRecorder" \
+            --add-data "filters.py:." \
+            main.py
+
+      - name: Zip .app for upload
+        run: |
+          cd dist
+          zip -r CamFilterRecorder-macos.zip CamFilterRecorder
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CamFilterRecorder-macos
+          path: dist/CamFilterRecorder-macos.zip
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/CamFilterRecorder-macos.zip
