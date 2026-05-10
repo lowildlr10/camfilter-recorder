@@ -39,11 +39,10 @@ jobs:
         run: copy LICENSE.txt packaging\LICENSE.txt
         shell: cmd
 
-      - name: Install NSIS
-        run: choco install nsis --no-progress -y
-
-      - name: Build NSIS installer
+      - name: Install NSIS and build installer
         run: |
+          choco install nsis --no-progress -y
+          $env:PATH += ";C:\Program Files (x86)\NSIS"
           cd packaging
           makensis installer.nsi
 
