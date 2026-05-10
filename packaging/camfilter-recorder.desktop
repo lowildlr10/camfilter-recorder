@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=CamFilter Recorder
+Comment=Webcam recorder with real-time filters
+Exec=/usr/local/bin/CamFilterRecorder
+Icon=camera
+Terminal=false
+Type=Application
+Categories=AudioVideo;Video;Recorder;

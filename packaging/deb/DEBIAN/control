@@ -1,0 +1,11 @@
+Package: camfilter-recorder
+Version: 1.0.0
+Section: video
+Priority: optional
+Architecture: amd64
+Maintainer: CamFilter Recorder <noreply@github.com>
+Description: Webcam recorder with real-time filters
+ CamFilter Recorder is a desktop application for recording webcam
+ or camera input with real-time filters including Night Vision,
+ Infrared/Thermal, Sepia, Cartoon, and more. Supports resolutions
+ from 240p up to 1080p.

@@ -1,8 +1,8 @@
-HOW TO GET YOUR EXE AND RPM AUTOMATICALLY BUILT
-================================================
+HOW TO GET YOUR EXE, RPM, AND DEB AUTOMATICALLY BUILT
+=======================================================
 
-GitHub Actions will build the Windows EXE, Fedora RPM, and macOS app
-for you — no need to install anything locally.
+GitHub Actions will build the Windows EXE, Fedora RPM, Ubuntu/Debian DEB,
+and macOS app for you — no need to install anything locally.
 
 STEP 1 — Create a GitHub repository
   1. Go to https://github.com/new
@@ -10,27 +10,34 @@ STEP 1 — Create a GitHub repository
   3. Upload the contents of this folder to the repo
 
 STEP 2 — Trigger a build
-  Option A — Build on every push (already enabled via workflow_dispatch):
+  Option A — Manual run:
     Go to your repo → Actions tab → "Build Installers" → "Run workflow"
 
-  Option B — Create a release (recommended):
+  Option B — Create a release tag (builds + auto-attaches files to a GitHub Release):
     git tag v1.0.0
     git push origin v1.0.0
-    GitHub Actions will automatically build and attach the files to a release.
 
 STEP 3 — Download your files
   Go to your repo → Actions → latest "Build Installers" run → Artifacts
-    • CamFilterRecorder-windows  →  CamFilterRecorder.exe
-    • CamFilterRecorder-fedora-rpm  →  CamFilterRecorder-1.0.0-1.fc40.x86_64.rpm
-    • CamFilterRecorder-macos  →  CamFilterRecorder-macos.zip
+    • CamFilterRecorder-windows      →  CamFilterRecorder.exe
+    • CamFilterRecorder-fedora-rpm   →  CamFilterRecorder-1.0.0-1.fc40.x86_64.rpm
+    • CamFilterRecorder-ubuntu-deb   →  camfilter-recorder_1.0.0_amd64.deb
+    • CamFilterRecorder-macos        →  CamFilterRecorder-macos.zip
 
-INSTALLING THE RPM ON FEDORA
-  sudo rpm -i CamFilterRecorder-1.0.0-1.fc40.x86_64.rpm
-  # or
+INSTALLING ON FEDORA
   sudo dnf install ./CamFilterRecorder-1.0.0-1.fc40.x86_64.rpm
+  # After install: find "CamFilter Recorder" in your app menu, or run:
+  CamFilterRecorder
 
-  After install, find "CamFilter Recorder" in your app menu,
-  or run:  CamFilterRecorder
-
-UNINSTALLING THE RPM
+UNINSTALLING ON FEDORA
   sudo dnf remove CamFilterRecorder
+
+INSTALLING ON UBUNTU / DEBIAN
+  sudo dpkg -i camfilter-recorder_1.0.0_amd64.deb
+  # or
+  sudo apt install ./camfilter-recorder_1.0.0_amd64.deb
+  # After install: find "CamFilter Recorder" in your app menu, or run:
+  CamFilterRecorder
+
+UNINSTALLING ON UBUNTU / DEBIAN
+  sudo dpkg -r camfilter-recorder
