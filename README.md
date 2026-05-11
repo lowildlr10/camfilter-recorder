@@ -1,6 +1,6 @@
 # CamFilter Recorder
 
-**Version 1.1.0** — Cross-platform webcam recorder with real-time filters.
+**Version 1.3.0** — Cross-platform webcam recorder with real-time filters.
 
 Record your camera with 14 live filters — Night Vision, Infrared/Thermal, Cartoon, Pencil Sketch, Sepia, and more — at resolutions from 240p up to 1080p. Save snapshots at any time. Ships as a self-contained installer on Windows, Fedora, and Ubuntu/Debian, and as a bundle on macOS. No Python installation required for end users.
 
@@ -11,10 +11,12 @@ Record your camera with 14 live filters — Night Vision, Infrared/Thermal, Cart
 - **14 real-time filters** — Normal, Grayscale, Night Vision, Infrared/Thermal, Cartoon, Pencil Sketch, Sepia, Vignette, Negative, Emboss, Blur, Edge Detection, Vintage, Pixelate
 - **Resolution control** — 240p · 360p · 480p · 720p · 1080p
 - **Brightness & Contrast sliders** applied before the filter
-- **Snapshot** — save any frame as a PNG with filter name and timestamp baked into the filename (`Ctrl+S`)
+- **Snapshot** — save any frame as PNG, JPG, BMP, or TIFF with filter name and timestamp baked into the filename (`Ctrl+S`)
 - **Video recording** with accurate FPS measurement and smart codec fallback
 - **Recording timer** with blinking REC indicator
 - **Always on Top** and **Fullscreen Preview** modes
+- **Settings dialog** — configure video format (AVI / MP4), image format, and separate output folders for recordings and snapshots
+- **Persistent preferences** — all settings survive app restarts
 - **Dark theme** UI built with PyQt6
 
 ---
@@ -34,7 +36,7 @@ To uninstall: **Control Panel → Programs → CamFilter Recorder → Uninstall*
 ### Fedora / RHEL
 
 ```bash
-sudo dnf install CamFilterRecorder-1.1.0-1.fc40.x86_64.rpm
+sudo dnf install CamFilterRecorder-1.3.0-1.fc40.x86_64.rpm
 # Launch from your application menu or:
 CamFilterRecorder
 ```
@@ -42,7 +44,7 @@ CamFilterRecorder
 ### Ubuntu / Debian
 
 ```bash
-sudo dpkg -i camfilter-recorder_1.1.0_amd64.deb
+sudo dpkg -i camfilter-recorder_1.3.0_amd64.deb
 # Launch from your application menu or:
 CamFilterRecorder
 ```
@@ -82,8 +84,8 @@ python main.py
 |---|---|
 | `Ctrl+R` | Start / Stop Recording |
 | `Ctrl+S` | Take Snapshot |
+| `Ctrl+,` | Open Settings |
 | `Ctrl+O` | Open Output Folder |
-| `Ctrl+F` | Change Output Folder |
 | `Ctrl+T` | Toggle Always on Top |
 | `F11` | Toggle Fullscreen Preview |
 | `Ctrl+Q` | Quit |
@@ -125,7 +127,7 @@ mkdir -p deb-pkg/usr/local/bin deb-pkg/usr/share/applications
 cp dist/CamFilterRecorder deb-pkg/usr/local/bin/
 cp packaging/camfilter-recorder.desktop deb-pkg/usr/share/applications/
 cp -r packaging/deb/DEBIAN deb-pkg/DEBIAN
-dpkg-deb --build deb-pkg dist/camfilter-recorder_1.1.0_amd64.deb
+dpkg-deb --build deb-pkg dist/camfilter-recorder_1.3.0_amd64.deb
 ```
 
 ### macOS
@@ -139,11 +141,11 @@ Output: `dist/CamFilterRecorder` (or `dist/CamFilterRecorder.app`)
 
 ### CI (GitHub Actions)
 
-Push a tag starting with `v` (e.g. `v1.1.0`) to trigger all four platform builds automatically. Installers are attached to the GitHub Release.
+Push a tag starting with `v` (e.g. `v1.3.0`) to trigger all four platform builds automatically. Installers are attached to the GitHub Release.
 
 ```bash
-git tag v1.1.0
-git push origin v1.1.0
+git tag v1.3.0
+git push origin v1.3.0
 ```
 
 ---
@@ -155,7 +157,8 @@ camera-recorder-app/
 ├── main.py              # Entry point — splash screen + QApplication startup
 ├── window.py            # MainWindow — all UI, no business logic (MVC View)
 ├── controller.py        # CameraThread + RecordingController (MVC Controller)
-├── dialogs.py           # AboutDialog + ShortcutsDialog
+├── dialogs.py           # AboutDialog, ShortcutsDialog, SettingsDialog
+├── settings.py          # AppSettings dataclass + QSettings persistence
 ├── constants.py         # App-wide constants (name, version, resolutions, shortcuts)
 ├── filters.py           # 14 filter implementations (Strategy pattern)
 ├── install_and_run.py   # Cross-platform dev launcher with auto-venv
@@ -178,7 +181,7 @@ camera-recorder-app/
 
 ## Output Files
 
-By default recordings and snapshots are saved to your **Videos** folder (or **Movies** on macOS, or home directory as fallback). You can change this at any time with the **Browse…** button or **File → Change Output Folder**.
+By default recordings and snapshots are saved to your **Videos** folder (or **Movies** on macOS, or home directory as fallback). You can configure separate output folders for each in **File → Settings** or via the **Settings** button.
 
 - **Recordings**: `recording_YYYYMMDD_HHMMSS_FilterName_720p.avi` (or `.mp4`)
 - **Snapshots**: `snapshot_YYYYMMDD_HHMMSS_FilterName.png`

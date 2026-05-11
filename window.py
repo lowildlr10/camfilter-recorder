@@ -1,9 +1,9 @@
 """
 window.py — Presentation layer (UI only).
 
-MainWindow wires together the UI widgets and delegates all business logic
-to RecordingController.  It never touches VideoWriter or cv2.VideoCapture
-directly.
+The sidebar exposes only the live-session controls (Camera, Filter,
+Resolution, Brightness, Contrast) and action buttons (Record, Snapshot).
+All file/format preferences live in SettingsDialog.
 """
 
 import sys
@@ -13,27 +13,36 @@ import numpy as np
 
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QLabel, QComboBox, QFileDialog, QStatusBar,
+    QPushButton, QLabel, QComboBox, QStatusBar,
     QGroupBox, QSlider, QFrame, QSizePolicy, QMessageBox,
+    QScrollArea,
 )
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QImage, QPixmap, QFont, QAction
 
 from constants import APP_NAME, APP_VERSION, APP_AUTHOR, RESOLUTIONS
-from filters import apply_filter, FILTER_NAMES
+from filters import FILTER_NAMES
 from controller import CameraThread, RecordingController
-from dialogs import AboutDialog, ShortcutsDialog
+from dialogs import AboutDialog, ShortcutsDialog, SettingsDialog
+from settings import AppSettings, load_settings, save_settings
 
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(f"{APP_NAME} {APP_VERSION}")
-        self.setMinimumSize(980, 720)
+        self.setMinimumSize(980, 600)
 
         self._camera_thread: CameraThread | None = None
         self._last_filtered: np.ndarray | None = None
-        self.output_path = self._default_output_dir()
+
+        # Load persisted settings; fill empty dirs with the OS default
+        self._settings = load_settings()
+        default_dir = self._default_output_dir()
+        if not self._settings.video_output_dir:
+            self._settings.video_output_dir = default_dir
+        if not self._settings.image_output_dir:
+            self._settings.image_output_dir = default_dir
 
         self._controller = RecordingController(self)
         self._connect_controller_signals()
@@ -43,7 +52,7 @@ class MainWindow(QMainWindow):
         self._apply_dark_theme()
         self._start_camera()
 
-    # ── Output directory ──────────────────────────────────────────────────────
+    # ── Helpers ───────────────────────────────────────────────────────────────
 
     def _default_output_dir(self) -> str:
         for candidate in [
@@ -61,7 +70,7 @@ class MainWindow(QMainWindow):
                 continue
         return os.path.expanduser("~")
 
-    # ── Controller signal wiring ──────────────────────────────────────────────
+    # ── Controller signals ────────────────────────────────────────────────────
 
     def _connect_controller_signals(self):
         c = self._controller
@@ -78,10 +87,11 @@ class MainWindow(QMainWindow):
 
         file_menu = mb.addMenu("&File")
         self._add_action(file_menu, "&Open Output Folder", "Ctrl+O", self._open_output_folder)
-        self._add_action(file_menu, "&Change Output Folder…", "Ctrl+F", self._browse_output)
         file_menu.addSeparator()
         self._add_action(file_menu, "&Start / Stop Recording", "Ctrl+R", self._toggle_recording)
-        self._add_action(file_menu, "&Take Snapshot", "Ctrl+S", self._take_snapshot)
+        self._add_action(file_menu, "&Take Snapshot",          "Ctrl+S", self._take_snapshot)
+        file_menu.addSeparator()
+        self._add_action(file_menu, "S&ettings…", "Ctrl+,", self._open_settings)
         file_menu.addSeparator()
         self._add_action(file_menu, "&Quit", "Ctrl+Q", self.close)
 
@@ -115,7 +125,7 @@ class MainWindow(QMainWindow):
         root.setContentsMargins(12, 12, 12, 12)
         root.setSpacing(12)
 
-        # Preview
+        # ── Preview ───────────────────────────────────────────────────────────
         self._preview = QLabel("Starting camera…")
         self._preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._preview.setSizePolicy(
@@ -126,25 +136,52 @@ class MainWindow(QMainWindow):
         )
         root.addWidget(self._preview, stretch=1)
 
-        # Sidebar
+        # ── Sidebar ───────────────────────────────────────────────────────────
         sidebar = QVBoxLayout()
-        sidebar.setSpacing(14)
+        sidebar.setSpacing(8)
+        sidebar.setContentsMargins(0, 0, 0, 0)
         root.addLayout(sidebar)
 
+        # Title (always visible)
         self._add_title(sidebar)
-        self._cam_combo   = self._add_combo_group(sidebar, "Camera", [])
-        self._filter_combo = self._add_combo_group(sidebar, "Filter", FILTER_NAMES)
-        self._res_combo   = self._add_combo_group(sidebar, "Resolution", list(RESOLUTIONS.keys()))
-        self._brightness  = self._add_slider(sidebar, "Brightness", -80, 80, 0)
-        self._contrast    = self._add_slider(sidebar, "Contrast", 10, 250, 100)
-        self._add_output_group(sidebar)
 
-        sidebar.addStretch()
+        # Scrollable live-session controls
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+
+        controls = QWidget()
+        ctrl_layout = QVBoxLayout(controls)
+        ctrl_layout.setSpacing(10)
+        ctrl_layout.setContentsMargins(0, 0, 4, 0)
+
+        self._cam_combo    = self._add_combo_group(ctrl_layout, "Camera", [])
+        self._filter_combo = self._add_combo_group(ctrl_layout, "Filter", FILTER_NAMES)
+        self._res_combo    = self._add_combo_group(ctrl_layout, "Resolution", list(RESOLUTIONS.keys()))
+        self._brightness   = self._add_slider(ctrl_layout, "Brightness", -80, 80, 0)
+        self._contrast     = self._add_slider(ctrl_layout, "Contrast",   10, 250, 100)
+        ctrl_layout.addStretch()
+
+        scroll.setWidget(controls)
+        sidebar.addWidget(scroll, stretch=1)
+
+        # Settings button (below scroll, above separator)
+        settings_btn = QPushButton("⚙  Settings")
+        settings_btn.setFixedHeight(30)
+        settings_btn.setStyleSheet(self._STYLE_SETTINGS)
+        settings_btn.clicked.connect(self._open_settings)
+        sidebar.addWidget(settings_btn)
+
         sidebar.addWidget(self._make_separator())
 
+        # Record button
         self._record_btn = self._make_record_button()
         sidebar.addWidget(self._record_btn)
 
+        # Snapshot button
         self._snap_btn = self._make_snapshot_button()
         sidebar.addWidget(self._snap_btn)
 
@@ -187,8 +224,12 @@ class MainWindow(QMainWindow):
         self._snap_clear_timer.setInterval(2500)
         self._snap_clear_timer.timeout.connect(lambda: self._snap_flash.setText(""))
 
+        # Wire controls
         self._populate_cameras()
         self._cam_combo.currentIndexChanged.connect(self._on_camera_changed)
+        self._filter_combo.currentTextChanged.connect(self._sync_filter)
+        self._brightness.valueChanged.connect(self._sync_brightness)
+        self._contrast.valueChanged.connect(self._sync_contrast)
 
     # ── Widget factories ──────────────────────────────────────────────────────
 
@@ -205,40 +246,30 @@ class MainWindow(QMainWindow):
 
     def _add_combo_group(self, layout: QVBoxLayout, label: str, items: list) -> QComboBox:
         group = QGroupBox(label)
-        g_layout = QVBoxLayout(group)
+        g = QVBoxLayout(group)
+        g.setContentsMargins(6, 4, 6, 6)
         combo = QComboBox()
         if items:
             combo.addItems(items)
-        g_layout.addWidget(combo)
+        g.addWidget(combo)
         layout.addWidget(group)
         return combo
 
     def _add_slider(
         self, layout: QVBoxLayout, label: str,
-        minimum: int, maximum: int, default: int
+        minimum: int, maximum: int, default: int,
     ) -> QSlider:
         group = QGroupBox(label)
-        g_layout = QVBoxLayout(group)
+        g = QVBoxLayout(group)
+        g.setContentsMargins(6, 4, 6, 6)
         slider = QSlider(Qt.Orientation.Horizontal)
         slider.setRange(minimum, maximum)
         slider.setValue(default)
         slider.setTickInterval((maximum - minimum) // 5)
         slider.setTickPosition(QSlider.TickPosition.TicksBelow)
-        g_layout.addWidget(slider)
+        g.addWidget(slider)
         layout.addWidget(group)
         return slider
-
-    def _add_output_group(self, layout: QVBoxLayout):
-        group = QGroupBox("Output Folder")
-        g_layout = QVBoxLayout(group)
-        self._out_label = QLabel(self.output_path)
-        self._out_label.setWordWrap(True)
-        self._out_label.setStyleSheet("font-size:11px; color:#aaa;")
-        g_layout.addWidget(self._out_label)
-        btn = QPushButton("Browse…")
-        btn.clicked.connect(self._browse_output)
-        g_layout.addWidget(btn)
-        layout.addWidget(group)
 
     def _make_separator(self) -> QFrame:
         line = QFrame()
@@ -277,6 +308,12 @@ class MainWindow(QMainWindow):
         "QPushButton:pressed { background:#0d47a1; }"
         "QPushButton:disabled { background:#252540; color:#555; }"
     )
+    _STYLE_SETTINGS = (
+        "QPushButton { background:#252540; border:1px solid #3a3a5c;"
+        " border-radius:5px; color:#aaa; font-size:11px; }"
+        "QPushButton:hover { background:#2e2e55; color:#e0e0e0; }"
+        "QPushButton:pressed { background:#1a1a3a; }"
+    )
 
     # ── Dark theme ────────────────────────────────────────────────────────────
 
@@ -294,6 +331,15 @@ class MainWindow(QMainWindow):
                 margin-top:6px; padding-top:4px;
             }
             QGroupBox::title { subcontrol-origin:margin; left:8px; top:2px; }
+            QScrollArea { background:transparent; border:none; }
+            QScrollBar:vertical {
+                background:#141428; width:6px; border-radius:3px;
+            }
+            QScrollBar::handle:vertical {
+                background:#3a3a5c; border-radius:3px; min-height:20px;
+            }
+            QScrollBar::handle:vertical:hover { background:#00d4aa; }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height:0; }
             QComboBox {
                 background:#252540; border:1px solid #3a3a5c;
                 border-radius:4px; padding:4px 8px; color:#e0e0e0;
@@ -334,7 +380,12 @@ class MainWindow(QMainWindow):
         if self._camera_thread:
             self._camera_thread.stop()
         self._controller.reset_frame_times()
+
         self._camera_thread = CameraThread(index, self)
+        self._camera_thread.filter_name = self._filter_combo.currentText()
+        self._camera_thread.brightness  = self._brightness.value()
+        self._camera_thread.contrast    = self._contrast.value() / 100.0
+
         self._camera_thread.frame_ready.connect(self._on_frame)
         self._camera_thread.start()
         self._status.showMessage(f"Camera {index} started")
@@ -346,16 +397,24 @@ class MainWindow(QMainWindow):
         if idx is not None:
             self._start_camera(idx)
 
+    # ── Sync UI → camera thread ───────────────────────────────────────────────
+
+    def _sync_filter(self, name: str):
+        if self._camera_thread:
+            self._camera_thread.filter_name = name
+
+    def _sync_brightness(self, value: int):
+        if self._camera_thread:
+            self._camera_thread.brightness = value
+
+    def _sync_contrast(self, value: int):
+        if self._camera_thread:
+            self._camera_thread.contrast = value / 100.0
+
     # ── Frame processing ──────────────────────────────────────────────────────
 
-    def _on_frame(self, raw: np.ndarray):
+    def _on_frame(self, filtered: np.ndarray):
         self._controller.record_frame_time()
-
-        brightness = self._brightness.value()
-        contrast   = self._contrast.value() / 100.0
-        adjusted   = cv2.convertScaleAbs(raw, alpha=contrast, beta=brightness)
-        filtered   = apply_filter(adjusted, self._filter_combo.currentText())
-
         self._last_filtered = filtered
 
         if self._controller.is_recording:
@@ -364,9 +423,9 @@ class MainWindow(QMainWindow):
         self._render_frame(filtered)
 
     def _render_frame(self, frame: np.ndarray):
-        rgb   = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        rgb  = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         h, w, ch = rgb.shape
-        qimg  = QImage(rgb.data, w, h, ch * w, QImage.Format.Format_RGB888)
+        qimg = QImage(rgb.data, w, h, ch * w, QImage.Format.Format_RGB888)
         self._preview.setPixmap(
             QPixmap.fromImage(qimg).scaled(
                 self._preview.size(),
@@ -375,16 +434,17 @@ class MainWindow(QMainWindow):
             )
         )
 
-    # ── Recording actions ─────────────────────────────────────────────────────
+    # ── Recording ─────────────────────────────────────────────────────────────
 
     def _toggle_recording(self):
         if self._controller.is_recording:
             self._controller.stop_recording()
         else:
             self._controller.start_recording(
-                output_dir=self.output_path,
+                output_dir=self._settings.video_output_dir,
                 resolution_key=self._res_combo.currentText(),
                 filter_tag=self._filter_combo.currentText(),
+                video_format=self._settings.video_format,
             )
 
     def _on_recording_started(self, path: str, fps: float):
@@ -397,7 +457,8 @@ class MainWindow(QMainWindow):
         self._blink_timer.start()
         self._clock_timer.start()
         self._timer_label.setText("00:00:00")
-        self._status.showMessage(f"Recording at {fps} FPS → {path}")
+        fmt = self._settings.video_format
+        self._status.showMessage(f"Recording {fmt} at {fps} FPS → {path}")
 
     def _on_recording_stopped(self, path: str):
         self._record_btn.setText("⏺  Start Recording")
@@ -426,7 +487,7 @@ class MainWindow(QMainWindow):
     def _on_recording_error(self, message: str):
         QMessageBox.critical(self, "Recording Error", message)
 
-    # ── Snapshot actions ──────────────────────────────────────────────────────
+    # ── Snapshot ──────────────────────────────────────────────────────────────
 
     def _take_snapshot(self):
         if self._last_filtered is None:
@@ -434,20 +495,34 @@ class MainWindow(QMainWindow):
             return
         self._controller.take_snapshot(
             frame=self._last_filtered,
-            output_dir=self.output_path,
+            output_dir=self._settings.image_output_dir,
             filter_name=self._filter_combo.currentText(),
+            image_format=self._settings.image_format,
         )
 
     def _on_snapshot_saved(self, path: str):
         filename = os.path.basename(path)
-        self._snap_flash.setText(f"Saved: {filename}")
+        fmt = self._settings.image_format
+        self._snap_flash.setText(f"Saved {fmt}: {filename}")
         self._status.showMessage(f"Snapshot → {path}")
         self._snap_clear_timer.start()
 
     def _on_snapshot_error(self, message: str):
         QMessageBox.warning(self, "Snapshot Error", f"Could not save snapshot:\n{message}")
 
-    # ── UI timer callbacks ────────────────────────────────────────────────────
+    # ── Settings dialog ───────────────────────────────────────────────────────
+
+    def _open_settings(self):
+        dlg = SettingsDialog(self._settings, self)
+        if dlg.exec():
+            self._settings = dlg.get_settings(self._settings)
+            save_settings(self._settings)
+            self._status.showMessage(
+                f"Settings saved — Video: {self._settings.video_format}  "
+                f"Image: {self._settings.image_format}"
+            )
+
+    # ── Timer callbacks ───────────────────────────────────────────────────────
 
     def _blink_rec(self):
         self._blink_state = not self._blink_state
@@ -460,23 +535,16 @@ class MainWindow(QMainWindow):
         s = self._elapsed_secs % 60
         self._timer_label.setText(f"{h:02d}:{m:02d}:{s:02d}")
 
-    # ── Menu action handlers ──────────────────────────────────────────────────
+    # ── Menu handlers ─────────────────────────────────────────────────────────
 
     def _open_output_folder(self):
+        path = self._settings.video_output_dir
         if sys.platform == "win32":
-            os.startfile(self.output_path)
+            os.startfile(path)
         elif sys.platform == "darwin":
-            os.system(f'open "{self.output_path}"')
+            os.system(f'open "{path}"')
         else:
-            os.system(f'xdg-open "{self.output_path}"')
-
-    def _browse_output(self):
-        folder = QFileDialog.getExistingDirectory(
-            self, "Select Output Folder", self.output_path
-        )
-        if folder:
-            self.output_path = folder
-            self._out_label.setText(folder)
+            os.system(f'xdg-open "{path}"')
 
     def _toggle_on_top(self, checked: bool):
         flags = self.windowFlags()

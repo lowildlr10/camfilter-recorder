@@ -1,9 +1,9 @@
 ; CamFilter Recorder — NSIS Installer Script
 ; Author : Lowil Ray Delos Reyes
-; Version: 1.1.0
+; Version: 1.3.0
 
 !define APP_NAME        "CamFilter Recorder"
-!define APP_VERSION     "1.1.0"
+!define APP_VERSION     "1.3.0"
 !define APP_PUBLISHER   "Lowil Ray Delos Reyes"
 !define APP_EXE         "CamFilterRecorder.exe"
 !define APP_DIR         "CamFilterRecorder"
@@ -31,7 +31,36 @@ SetCompressor     /SOLID lzma
 
 !insertmacro MUI_LANGUAGE "English"
 
-; ── Installer ──────────────────────────────────────────────
+; ── Upgrade detection ───────────────────────────────────────────────────────
+; On startup, check whether a previous version is already installed.
+; If so, offer to uninstall it first so the new version installs cleanly.
+Function .onInit
+  ReadRegStr $R0 HKLM "${UNINSTALL_KEY}" "UninstallString"
+  StrCmp $R0 "" done          ; nothing installed → continue normally
+
+  ReadRegStr $R1 HKLM "${UNINSTALL_KEY}" "DisplayVersion"
+
+  MessageBox MB_OKCANCEL|MB_ICONQUESTION \
+    "${APP_NAME} $R1 is already installed.$\n$\n\
+Click OK to remove it and install ${APP_NAME} ${APP_VERSION}.$\n\
+Click Cancel to exit." \
+    IDOK do_uninstall
+  Abort                       ; user cancelled
+
+do_uninstall:
+  ; Run the existing uninstaller silently, keeping the install directory
+  ; so we can overwrite it in the very next step.
+  ExecWait '"$R0" /S _?=$INSTDIR'
+
+  ; If the uninstaller binary itself is still there (e.g. couldn't self-delete),
+  ; remove it so the fresh install can write a clean copy.
+  IfFileExists "$INSTDIR\Uninstall.exe" 0 done
+  Delete "$INSTDIR\Uninstall.exe"
+
+done:
+FunctionEnd
+
+; ── Installer ──────────────────────────────────────────────────────────────
 Section "CamFilter Recorder" SecMain
   SectionIn RO
   SetOutPath "$INSTDIR"
@@ -59,7 +88,7 @@ Section "CamFilter Recorder" SecMain
   CreateShortcut  "$DESKTOP\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}"
 SectionEnd
 
-; ── Uninstaller ────────────────────────────────────────────
+; ── Uninstaller ─────────────────────────────────────────────────────────────
 Section "Uninstall"
   RMDir /r "$INSTDIR"
   Delete "$DESKTOP\${APP_NAME}.lnk"

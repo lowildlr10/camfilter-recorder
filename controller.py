@@ -2,7 +2,9 @@
 controller.py — Business logic layer (no UI code).
 
 Responsibilities:
-  - CameraThread   : reads raw frames from OpenCV in a background thread.
+  - CameraThread        : reads raw frames, applies brightness/contrast and
+                          the active filter entirely inside the background
+                          thread so the UI event loop is never blocked.
   - RecordingController : manages VideoWriter lifecycle, FPS measurement,
                           snapshot saving, and recording state.  Communicates
                           with the UI exclusively through Qt signals.
@@ -18,14 +20,22 @@ from datetime import datetime
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
 
 from constants import (
-    RESOLUTIONS, FALLBACK_FPS, FPS_SAMPLE_WINDOW, CODEC_CANDIDATES,
+    RESOLUTIONS, FALLBACK_FPS, FPS_SAMPLE_WINDOW, VIDEO_FORMATS, IMAGE_FORMATS,
 )
+from filters import apply_filter
 
 
-# ── Camera thread ─────────────────────────────────────────────────────────────
+# ── Camera + filter thread ────────────────────────────────────────────────────
 
 class CameraThread(QThread):
-    """Reads frames from a camera device and emits them via a Qt signal."""
+    """
+    Reads raw frames from the camera device and applies brightness, contrast,
+    and the selected filter entirely within this background thread.
+
+    Settings (filter_name, brightness, contrast) are written from the UI
+    thread and read here; Python's GIL makes plain attribute reads/writes
+    on simple types atomic, so no additional locking is needed.
+    """
 
     frame_ready = pyqtSignal(np.ndarray)
 
@@ -34,15 +44,26 @@ class CameraThread(QThread):
         self.camera_index = camera_index
         self._running = False
 
+        # Written by the UI thread, read here — GIL-safe for simple types
+        self.filter_name: str   = "Normal"
+        self.brightness:  int   = 0
+        self.contrast:    float = 1.0
+
     def run(self):
         self._running = True
         cap = cv2.VideoCapture(self.camera_index)
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH,  1920)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+
         while self._running:
             ret, frame = cap.read()
-            if ret:
-                self.frame_ready.emit(frame)
+            if not ret:
+                continue
+            adjusted = cv2.convertScaleAbs(
+                frame, alpha=self.contrast, beta=self.brightness
+            )
+            self.frame_ready.emit(apply_filter(adjusted, self.filter_name))
+
         cap.release()
 
     def stop(self):
@@ -58,9 +79,9 @@ class RecordingController(QObject):
 
     Signals emitted (observed by the UI):
       recording_started(path, fps)  — recording opened successfully
-      recording_stopped(path)       — recording finalized; path is the saved file
-      recording_error(message)      — codec/IO failure
-      snapshot_saved(path)          — snapshot PNG written
+      recording_stopped(path)       — recording finalized
+      recording_error(message)      — codec / IO failure
+      snapshot_saved(path)          — snapshot image written
       snapshot_error(message)       — snapshot write failure
     """
 
@@ -80,7 +101,6 @@ class RecordingController(QObject):
     # ── FPS measurement ───────────────────────────────────────────────────────
 
     def record_frame_time(self):
-        """Call once per incoming camera frame to track the real FPS."""
         self._frame_times.append(time.monotonic())
 
     def reset_frame_times(self):
@@ -97,22 +117,32 @@ class RecordingController(QObject):
 
     # ── Recording ─────────────────────────────────────────────────────────────
 
-    def start_recording(self, output_dir: str, resolution_key: str, filter_tag: str):
+    def start_recording(
+        self,
+        output_dir:     str,
+        resolution_key: str,
+        filter_tag:     str,
+        video_format:   str = "AVI",
+    ):
         """
-        Open a VideoWriter using the best available codec and emit
-        ``recording_started`` or ``recording_error``.
+        Open a VideoWriter using the codec candidates for *video_format*
+        and emit ``recording_started`` or ``recording_error``.
         """
         w, h = RESOLUTIONS[resolution_key]
-        fps = round(self.measured_fps, 2)
+        fps  = round(self.measured_fps, 2)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        safe_tag = filter_tag.replace(" ", "_").replace("/", "-")
-        res_tag = resolution_key[:5].strip()
-        base = os.path.join(output_dir, f"recording_{timestamp}_{safe_tag}_{res_tag}")
+        safe_tag  = filter_tag.replace(" ", "_").replace("/", "-")
+        res_tag   = resolution_key[:5].strip()
+        base      = os.path.join(
+            output_dir, f"recording_{timestamp}_{safe_tag}_{res_tag}"
+        )
 
-        writer, path = self._open_writer(base, w, h, fps)
+        candidates = VIDEO_FORMATS.get(video_format, VIDEO_FORMATS["AVI"])
+        writer, path = self._open_writer(base, w, h, fps, candidates)
+
         if writer is None:
             self.recording_error.emit(
-                "Could not open any video codec on this system.\n\n"
+                f"Could not open any {video_format} codec on this system.\n\n"
                 "Try installing ffmpeg:\n"
                 "  Fedora: sudo dnf install ffmpeg\n"
                 "  Ubuntu: sudo apt install ffmpeg"
@@ -125,7 +155,6 @@ class RecordingController(QObject):
         self.recording_started.emit(path, fps)
 
     def write_frame(self, frame: np.ndarray, resolution_key: str):
-        """Write a single filtered frame to the open VideoWriter."""
         if not self.is_recording or self._writer is None:
             return
         if not self._writer.isOpened():
@@ -134,7 +163,6 @@ class RecordingController(QObject):
         self._writer.write(cv2.resize(frame, (w, h)))
 
     def stop_recording(self):
-        """Finalize and close the VideoWriter, then emit ``recording_stopped``."""
         self.is_recording = False
         if self._writer:
             self._writer.release()
@@ -143,14 +171,26 @@ class RecordingController(QObject):
 
     # ── Snapshot ──────────────────────────────────────────────────────────────
 
-    def take_snapshot(self, frame: np.ndarray, output_dir: str, filter_name: str):
-        """Save the current filtered frame as a PNG and emit the result signal."""
+    def take_snapshot(
+        self,
+        frame:        np.ndarray,
+        output_dir:   str,
+        filter_name:  str,
+        image_format: str = "PNG",
+    ):
+        """Save the current filtered frame in the chosen format."""
+        ext       = IMAGE_FORMATS.get(image_format, ".png")
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:21]
-        safe_tag = filter_name.replace(" ", "_").replace("/", "-")
-        filename = f"snapshot_{timestamp}_{safe_tag}.png"
-        filepath = os.path.join(output_dir, filename)
+        safe_tag  = filter_name.replace(" ", "_").replace("/", "-")
+        filename  = f"snapshot_{timestamp}_{safe_tag}{ext}"
+        filepath  = os.path.join(output_dir, filename)
+
+        encode_params: list[int] = []
+        if image_format == "JPG":
+            encode_params = [cv2.IMWRITE_JPEG_QUALITY, 95]
+
         try:
-            cv2.imwrite(filepath, frame)
+            cv2.imwrite(filepath, frame, encode_params)
             self.snapshot_saved.emit(filepath)
         except Exception as exc:
             self.snapshot_error.emit(str(exc))
@@ -159,10 +199,14 @@ class RecordingController(QObject):
 
     @staticmethod
     def _open_writer(
-        base_path: str, w: int, h: int, fps: float
+        base_path:  str,
+        w:          int,
+        h:          int,
+        fps:        float,
+        candidates: list[tuple[str, str]],
     ) -> tuple[cv2.VideoWriter | None, str]:
-        for fourcc_str, ext in CODEC_CANDIDATES:
-            path = base_path + ext
+        for fourcc_str, ext in candidates:
+            path   = base_path + ext
             fourcc = cv2.VideoWriter_fourcc(*fourcc_str)
             writer = cv2.VideoWriter(path, fourcc, fps, (w, h))
             if writer.isOpened():

@@ -1,5 +1,5 @@
 Package: camfilter-recorder
-Version: 1.1.0
+Version: 1.3.0
 Section: video
 Priority: optional
 Architecture: amd64
